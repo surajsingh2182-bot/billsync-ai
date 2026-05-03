@@ -1,7 +1,6 @@
 import streamlit as st
-import anthropic
+import google.generativeai as genai
 import pandas as pd
-import json
 import time
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -14,10 +13,7 @@ st.set_page_config(
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Main background */
     .stApp { background-color: #f8f9fb; }
-
-    /* Agent cards */
     .agent-card {
         background: white;
         border-radius: 12px;
@@ -33,40 +29,14 @@ st.markdown("""
         color: #6b7280;
         margin-bottom: 0.3rem;
     }
-    .agent-name {
-        font-size: 1.05rem;
-        font-weight: 600;
-        color: #111827;
-        margin-bottom: 0.5rem;
-    }
     .agent-output {
         font-size: 0.9rem;
         color: #374151;
         line-height: 1.7;
         white-space: pre-wrap;
     }
-
-    /* Status badges */
-    .badge-waiting  { color: #9ca3af; font-size: 0.82rem; }
-    .badge-running  { color: #f59e0b; font-size: 0.82rem; }
-    .badge-done     { color: #10b981; font-size: 0.82rem; }
-
-    /* Metric cards */
-    .metric-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-    .metric-box {
-        background: white;
-        border-radius: 10px;
-        padding: 1rem 1.4rem;
-        border: 1px solid #e8eaf0;
-        min-width: 140px;
-        flex: 1;
-    }
-    .metric-val { font-size: 2rem; font-weight: 700; line-height: 1; }
-    .metric-label { font-size: 0.78rem; color: #6b7280; margin-top: 4px; }
-
-    /* Header */
     .app-header {
-        background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+        background: linear-gradient(135deg, #0f172a 0%, #1a3a5c 100%);
         border-radius: 14px;
         padding: 2rem 2.5rem;
         margin-bottom: 2rem;
@@ -74,11 +44,7 @@ st.markdown("""
     }
     .app-title { font-size: 1.8rem; font-weight: 700; margin: 0; }
     .app-sub   { font-size: 0.95rem; opacity: 0.7; margin-top: 4px; }
-
-    /* Divider */
     hr { border: none; border-top: 1px solid #e8eaf0; margin: 1.5rem 0; }
-
-    /* Hide streamlit default header */
     #MainMenu, footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -87,19 +53,20 @@ st.markdown("""
 st.markdown("""
 <div class="app-header">
     <div class="app-title">⚖️ BillSync AI</div>
-    <div class="app-sub">Multi-Agent Billing & Payment Reconciliation · Powered by Claude</div>
+    <div class="app-sub">Multi-Agent Billing & Payment Reconciliation · Powered by Google Gemini</div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Sidebar — API key ─────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🔑 Configuration")
     api_key = st.text_input(
-        "Anthropic API Key",
+        "Google Gemini API Key",
         type="password",
-        placeholder="sk-ant-...",
-        help="Get your key at console.anthropic.com"
+        placeholder="AIza...",
+        help="Get your free key at aistudio.google.com"
     )
+    st.markdown("[👉 Get a free Gemini API key](https://aistudio.google.com/app/apikey)")
     st.markdown("---")
     st.markdown("### 📋 How it works")
     st.markdown("""
@@ -107,18 +74,18 @@ with st.sidebar:
 2. Upload your **Payments CSV**
 3. Click **Run Reconciliation**
 4. Watch 4 AI agents work in sequence
-5. Review the report
+5. Download the final report
     """)
     st.markdown("---")
     st.markdown("### 🤖 The 4 Agents")
     st.markdown("""
-- **Data Analyst** — reads & validates data
-- **Matching Agent** — pairs invoices to payments
-- **Auditor** — flags risks & anomalies
-- **Report Writer** — final executive summary
+- 🔍 **Data Analyst** — reads & validates data
+- 🔗 **Matching Agent** — pairs invoices to payments
+- ⚠️ **Auditor** — flags risks & anomalies
+- 📝 **Report Writer** — executive summary
     """)
 
-# ── File upload ───────────────────────────────────────────────────────────────
+# ── File Upload ───────────────────────────────────────────────────────────────
 col1, col2 = st.columns(2)
 
 with col1:
@@ -151,24 +118,25 @@ with col2:
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
-# ── Agent runner ──────────────────────────────────────────────────────────────
-def call_claude(client, system_prompt, user_message):
-    """Single Claude API call — one agent."""
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1500,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}]
+
+# ── Agent functions ───────────────────────────────────────────────────────────
+def call_gemini(api_key, system_prompt, user_message):
+    """Single Gemini API call — one agent."""
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=system_prompt
     )
-    return response.content[0].text
+    response = model.generate_content(user_message)
+    return response.text
 
 
-def run_agent_1(client, inv_csv, pay_csv):
+def run_agent_1(api_key, inv_csv, pay_csv):
     system = """You are a Data Analyst Agent specialising in financial data.
-Your job is to read the invoice and payment datasets provided and produce a clear, 
-structured data quality summary. 
+Your job is to read the invoice and payment datasets and produce a clear structured summary.
 
 Return your response in this exact structure:
+
 INVOICE SUMMARY
 - Total invoices: X
 - Total value: ₹X
@@ -176,7 +144,7 @@ INVOICE SUMMARY
 - Date range: ...
 - Any data quality issues: ...
 
-PAYMENT SUMMARY  
+PAYMENT SUMMARY
 - Total transactions: X
 - Total value: ₹X
 - Payment modes used: ...
@@ -195,37 +163,33 @@ INVOICES CSV:
 PAYMENTS CSV:
 {pay_csv}
 
-Please analyse both datasets and provide your summary."""
-    return call_claude(client, system, user_msg)
+Please analyse both datasets and provide your structured summary."""
+    return call_gemini(api_key, system, user_msg)
 
 
-def run_agent_2(client, inv_csv, pay_csv, agent1_output):
+def run_agent_2(api_key, inv_csv, pay_csv, agent1_output):
     system = """You are a Matching Agent specialising in payment reconciliation.
-Your job is to match each invoice to its corresponding payment transaction.
-
-Matching rules (in order of priority):
-1. Exact match on invoice_id = reference field
-2. Fuzzy match — reference contains the invoice number in a different format
-3. Amount + payer name similarity match (when reference is missing)
+Match each invoice to its corresponding payment using these rules in order:
+1. Exact match: invoice_id equals reference field
+2. Fuzzy match: reference contains invoice number in a different format (e.g. INVOICE008 = INV-008)
+3. Amount + payer name similarity when reference is missing
 4. If no match found, mark as UNMATCHED
 
 Return your response in this exact structure:
 
 MATCHED PAIRS
 | Invoice ID | Customer | Invoice Amount | Transaction ID | Paid Amount | Match Type | Difference |
-(list every matched pair)
+(one row per matched pair)
 
 UNMATCHED INVOICES
 | Invoice ID | Customer | Amount | Reason |
-(invoices with no payment found)
 
-UNMATCHED PAYMENTS  
+UNMATCHED PAYMENTS
 | Transaction ID | Payer | Amount | Reason |
-(payments that couldn't be linked to any invoice)
 
 MATCHING SUMMARY
 - Total matched: X
-- Total unmatched invoices: X  
+- Total unmatched invoices: X
 - Total unmatched payments: X
 """
     user_msg = f"""INVOICES:
@@ -237,57 +201,53 @@ PAYMENTS:
 CONTEXT FROM DATA ANALYST:
 {agent1_output}
 
-Please match invoices to payments and return results."""
-    return call_claude(client, system, user_msg)
+Please match invoices to payments and return results in the specified format."""
+    return call_gemini(api_key, system, user_msg)
 
 
-def run_agent_3(client, agent2_output):
+def run_agent_3(api_key, agent2_output):
     system = """You are an Auditor Agent specialising in financial risk and compliance.
-Your job is to analyse the matching results and flag anomalies, risks, and discrepancies.
+Analyse the matching results and flag all anomalies and risks.
 
 Look for:
 - Short payments (paid less than invoiced)
-- Overpayments (paid more than invoiced)  
+- Overpayments (paid more than invoiced)
 - Possible duplicate payments (same invoice paid twice)
-- Unknown payments (no reference, unknown payer)
-- Long overdue invoices
+- Unknown payments (no reference or unknown payer)
+- Long overdue unpaid invoices
 - Suspicious patterns
 
 Return your response in this exact structure:
 
 🚨 HIGH RISK ITEMS
 | Issue Type | Invoice/Txn ID | Details | Recommended Action |
-(list high severity items)
 
 ⚠️ MEDIUM RISK ITEMS
 | Issue Type | Invoice/Txn ID | Details | Recommended Action |
-(list medium severity items)
 
 ✅ LOW RISK / INFORMATIONAL
 | Issue Type | Details |
-(list low severity observations)
 
 RISK SUMMARY
 - High risk items: X
-- Medium risk items: X  
-- Total exposure: ₹X
-- Overall reconciliation health: Good/Fair/Poor
+- Medium risk items: X
+- Total financial exposure: ₹X
+- Overall reconciliation health: Good / Fair / Poor
 """
     user_msg = f"""Here are the matching results from the Matching Agent:
 
 {agent2_output}
 
-Please audit these results and flag all risks and anomalies."""
-    return call_claude(client, system, user_msg)
+Please audit these results and flag all risks."""
+    return call_gemini(api_key, system, user_msg)
 
 
-def run_agent_4(client, inv_csv, pay_csv, agent1_output, agent2_output, agent3_output):
+def run_agent_4(api_key, agent1_output, agent2_output, agent3_output):
     system = """You are a Report Writer Agent specialising in executive financial summaries.
-Your job is to synthesise all findings from the other agents into a clear, 
-professional executive summary that a finance manager can act on immediately.
+Synthesise all findings into a clear professional executive summary a finance manager
+can act on immediately. Write in plain business English. Be direct and actionable.
 
-Write in plain business English. Be direct and actionable.
-Structure your report as:
+Structure your report exactly like this:
 
 EXECUTIVE SUMMARY
 (2-3 sentence overview)
@@ -299,50 +259,41 @@ WHAT NEEDS IMMEDIATE ATTENTION
 (numbered list of actions required today)
 
 WHAT IS RECONCILED AND CLOSED
-(brief confirmation of what's clean)
+(brief confirmation of what is clean)
 
 RECOMMENDED NEXT STEPS
 (numbered list of follow-up actions this week)
 
-Keep the total report under 400 words. Use ₹ for currency amounts.
+Keep the total report under 400 words. Use ₹ for all currency amounts.
 """
-    user_msg = f"""Here are all the findings from the reconciliation pipeline:
-
-ORIGINAL DATA:
-Invoices: {inv_csv[:500]}...
-Payments: {pay_csv[:500]}...
-
-AGENT 1 — DATA ANALYST OUTPUT:
+    user_msg = f"""AGENT 1 — DATA ANALYST:
 {agent1_output}
 
-AGENT 2 — MATCHING AGENT OUTPUT:
+AGENT 2 — MATCHING AGENT:
 {agent2_output}
 
-AGENT 3 — AUDITOR OUTPUT:
+AGENT 3 — AUDITOR:
 {agent3_output}
 
 Please write the final executive reconciliation report."""
-    return call_claude(client, system, user_msg)
+    return call_gemini(api_key, system, user_msg)
 
 
 # ── Run button ────────────────────────────────────────────────────────────────
 can_run = invoice_file and payment_file and api_key
 
 if not api_key:
-    st.info("👈 Enter your Anthropic API key in the sidebar to get started.")
+    st.info("👈 Enter your free Gemini API key in the sidebar. [Get one here](https://aistudio.google.com/app/apikey)")
 elif not invoice_file or not payment_file:
-    st.info("⬆️ Upload both the invoice CSV and payments CSV above to continue.")
+    st.info("⬆️ Upload both the Invoice CSV and Payments CSV above to continue.")
 
 if can_run:
     if st.button("⚡ Run Reconciliation", type="primary", use_container_width=True):
 
-        # Reset file pointers
         invoice_file.seek(0)
         payment_file.seek(0)
         inv_csv = invoice_file.read().decode("utf-8")
         pay_csv = payment_file.read().decode("utf-8")
-
-        client = anthropic.Anthropic(api_key=api_key)
 
         st.markdown("## 🤖 Agent Pipeline Running")
         st.markdown("Each agent completes its task and hands off to the next.")
@@ -354,20 +305,30 @@ if can_run:
         with st.status("🔍 Agent 1: Data Analyst — reading and validating your data...", expanded=True) as status:
             st.write("Analysing invoice structure and payment records...")
             time.sleep(0.5)
-            agent1_result = run_agent_1(client, inv_csv, pay_csv)
-            results["agent1"] = agent1_result
-            status.update(label="✅ Agent 1: Data Analyst — complete", state="complete")
+            try:
+                agent1_result = run_agent_1(api_key, inv_csv, pay_csv)
+                results["agent1"] = agent1_result
+                status.update(label="✅ Agent 1: Data Analyst — complete", state="complete")
+            except Exception as e:
+                status.update(label="❌ Agent 1 failed", state="error")
+                st.error(f"Error: {e}")
+                st.stop()
 
         with st.expander("📊 Agent 1 Output — Data Summary", expanded=False):
-            st.markdown(f"```\n{agent1_result}\n```")
+            st.markdown(agent1_result)
 
         # ── Agent 2 ──────────────────────────────────────────────────────────
         with st.status("🔗 Agent 2: Matching Agent — pairing invoices to payments...", expanded=True) as status:
             st.write("Running exact match → fuzzy match → semantic match...")
             time.sleep(0.5)
-            agent2_result = run_agent_2(client, inv_csv, pay_csv, agent1_result)
-            results["agent2"] = agent2_result
-            status.update(label="✅ Agent 2: Matching Agent — complete", state="complete")
+            try:
+                agent2_result = run_agent_2(api_key, inv_csv, pay_csv, agent1_result)
+                results["agent2"] = agent2_result
+                status.update(label="✅ Agent 2: Matching Agent — complete", state="complete")
+            except Exception as e:
+                status.update(label="❌ Agent 2 failed", state="error")
+                st.error(f"Error: {e}")
+                st.stop()
 
         with st.expander("🔗 Agent 2 Output — Match Results", expanded=False):
             st.markdown(agent2_result)
@@ -376,20 +337,30 @@ if can_run:
         with st.status("⚠️ Agent 3: Auditor — flagging risks and anomalies...", expanded=True) as status:
             st.write("Scanning for duplicates, short payments, unknown transactions...")
             time.sleep(0.5)
-            agent3_result = run_agent_3(client, agent2_result)
-            results["agent3"] = agent3_result
-            status.update(label="✅ Agent 3: Auditor — complete", state="complete")
+            try:
+                agent3_result = run_agent_3(api_key, agent2_result)
+                results["agent3"] = agent3_result
+                status.update(label="✅ Agent 3: Auditor — complete", state="complete")
+            except Exception as e:
+                status.update(label="❌ Agent 3 failed", state="error")
+                st.error(f"Error: {e}")
+                st.stop()
 
         with st.expander("⚠️ Agent 3 Output — Audit & Risk Report", expanded=False):
             st.markdown(agent3_result)
 
         # ── Agent 4 ──────────────────────────────────────────────────────────
         with st.status("📝 Agent 4: Report Writer — generating executive summary...", expanded=True) as status:
-            st.write("Synthesising all findings into final report...")
+            st.write("Synthesising all findings into the final report...")
             time.sleep(0.5)
-            agent4_result = run_agent_4(client, inv_csv, pay_csv, agent1_result, agent2_result, agent3_result)
-            results["agent4"] = agent4_result
-            status.update(label="✅ Agent 4: Report Writer — complete", state="complete")
+            try:
+                agent4_result = run_agent_4(api_key, agent1_result, agent2_result, agent3_result)
+                results["agent4"] = agent4_result
+                status.update(label="✅ Agent 4: Report Writer — complete", state="complete")
+            except Exception as e:
+                status.update(label="❌ Agent 4 failed", state="error")
+                st.error(f"Error: {e}")
+                st.stop()
 
         # ── Final report ──────────────────────────────────────────────────────
         st.markdown("<hr>", unsafe_allow_html=True)
@@ -402,10 +373,10 @@ if can_run:
             unsafe_allow_html=True
         )
 
-        # ── Download ──────────────────────────────────────────────────────────
+        # ── Download button ───────────────────────────────────────────────────
         st.markdown("<hr>", unsafe_allow_html=True)
         full_report = f"""BILLSYNC AI — RECONCILIATION REPORT
-Generated by Multi-Agent Pipeline
+Generated by Multi-Agent Pipeline (Google Gemini)
 {'='*60}
 
 AGENT 1 — DATA ANALYST
